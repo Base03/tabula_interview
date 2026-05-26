@@ -74,3 +74,4 @@ types-PyYAML
 types-Pillow
 types-tqdm
 scipy-stubs
+pandas-stubs

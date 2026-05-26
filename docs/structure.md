@@ -14,8 +14,9 @@ Snapshot of the layout at session start (2026-05-25). The repo is a fresh scaffo
 |-- .vscode/               # Empty (gitignored)
 |-- docs/                  # Project briefs and reference material (see below)
 |-- scripts/               # Dev workflow shell scripts
+|-- paper-repo/            # Shallow clone of mdmparis/coli_phage_interactions_2023 (gitignored, ~210MB)
 |-- src/                   # Python source -- currently just an empty __init__.py
-|-- tests/                 # Pytest tests -- currently just an empty __init__.py
+|-- tests/                 # Pytest tests (see below)
 `-- venv/                  # Local Python 3.12 venv (gitignored, rebuilt by bootstrap.sh)
 ```
 
@@ -41,7 +42,18 @@ All scripts `cd` to repo root and invoke binaries from `./venv/bin/` directly. T
 
 ## src/ and tests/
 
-Both empty (just `__init__.py`). All implementation work lives here once started.
+`src/` is empty (just `__init__.py`); all implementation work lives there once started.
+
+`tests/` contains:
+- `__init__.py` (empty)
+- `test_paper_pipeline_structure.py` -- structural-contract test that traces `predict_all_phages.py` against the data in `paper-repo/` and asserts the pre/post-one-hot dims, the 402-vs-403 anomaly, the absence of `H_host`, the LF110 carve-out, and the NaN-handling of the `same_ABC_as_host` bug. If the paper repo's schema ever shifts, this test surfaces which doc claim went stale. Auto-clones `paper-repo/` on first run; skips with a clear message if cloning fails.
+
+## paper-repo/
+
+Shallow clone of [mdmparis/coli_phage_interactions_2023](https://github.com/mdmparis/coli_phage_interactions_2023) at the project root, used as read-only input by the structural-contract test in `tests/`. Gitignored (~210MB, mostly genome data we don't want to vendor). Re-clone with:
+```bash
+rm -rf paper-repo && git clone --depth 1 https://github.com/mdmparis/coli_phage_interactions_2023.git paper-repo
+```
 
 ## .claude/
 
