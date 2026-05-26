@@ -1,0 +1,55 @@
+{
+  "effortLevel": "xhigh",         
+  "showThinkingSummaries": true,
+  "model": "claude-opus-4-7[1m]",
+  "env": {
+    "HF_HUB_DISABLE_PROGRESS_BARS": "1",
+    "TRANSFORMERS_VERBOSITY": "error",
+    "TQDM_DISABLE": "1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-7[1m]"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(pip install *)",
+            "command": "echo 'Use requirements-dev.txt + ./scripts/bootstrap.sh instead of pip install.' >&2; exit 2"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"git push requires user approval.\"}}'"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git reset *)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"git reset requires user approval.\"}}'"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git checkout -- *)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"git checkout -- requires user approval.\"}}'"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git clean *)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"git clean requires user approval.\"}}'"
+          },
+          {
+            "type": "command",
+            "if": "Bash(git rebase *)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"git rebase requires user approval.\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}
