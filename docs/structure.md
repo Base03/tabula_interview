@@ -34,7 +34,7 @@ Background and brief for the onsite. Read these before writing code.
 
 All scripts `cd` to repo root and invoke binaries from `./venv/bin/` directly. The venv is NOT activated in-shell -- it's referenced by absolute path inside each script. No system Python is used.
 
-- `bootstrap.sh` -- `python3 -m venv venv && ./venv/bin/pip install -r requirements-dev.txt`
+- `bootstrap.sh` -- `python3 -m venv venv && ./venv/bin/pip install -r requirements-dev.txt`, then clones `paper-repo/` if missing (echoes "skipping" if present; does not auto-update on subsequent runs).
 - `format.sh` -- isort (black profile, gitignore-aware) + black, on `src tests`
 - `lint.sh` -- `mypy -- src tests`
 - `test.sh` -- `pytest` (no `-v`, picks up both `tests/` and any other auto-discovered dirs)
@@ -50,9 +50,13 @@ All scripts `cd` to repo root and invoke binaries from `./venv/bin/` directly. T
 
 ## paper-repo/
 
-Shallow clone of [mdmparis/coli_phage_interactions_2023](https://github.com/mdmparis/coli_phage_interactions_2023) at the project root, used as read-only input by the structural-contract test in `tests/`. Gitignored (~210MB, mostly genome data we don't want to vendor). Re-clone with:
+Shallow clone of [mdmparis/coli_phage_interactions_2023](https://github.com/mdmparis/coli_phage_interactions_2023) at the project root, used as read-only input by the structural-contract test in `tests/`. Gitignored (~210MB, mostly genome data we don't want to vendor).
+
+`./scripts/bootstrap.sh` clones it on first run and prints "paper-repo already present, skipping clone." on subsequent runs. The test fixture in `tests/test_paper_pipeline_structure.py` also has an auto-clone fallback so `./scripts/test.sh` works on a fresh checkout without bootstrapping.
+
+To refresh against the upstream repo:
 ```bash
-rm -rf paper-repo && git clone --depth 1 https://github.com/mdmparis/coli_phage_interactions_2023.git paper-repo
+rm -rf paper-repo && ./scripts/bootstrap.sh
 ```
 
 ## .claude/
