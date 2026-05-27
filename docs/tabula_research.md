@@ -6,7 +6,76 @@ A working reference for the Tabula bacterial-side prediction onsite, intended as
 > 1. **Read this entire document before writing code.** It encodes decisions, corrections, and pitfalls that aren't obvious from the paper or the README alone.
 > 2. **The first goal is to reproduce the paper, not to beat it.** See Sec.1.1 for why this is non-negotiable.
 > 3. When in doubt, **read the actual training script** at `dev/predictions/predict_all_phages.py` (linked below) -- it differs from the README in important ways.
-> 4. Items marked `[VERIFIED-FROM-CODE]` were extracted directly from the repo's source files. Items marked `[UNVERIFIED]` are best estimates.
+> 4. Tag conventions:
+>    - `[VERIFIED-FROM-CODE]` -- extracted directly from the repo's source files (predict_all_phages.py).
+>    - `[VERIFIED-BY-TRACE]` -- verified by running the trace scripts at `tests/test_paper_pipeline_structure.py` and `tests/test_strain_identifiers.py` against the published data.
+>    - `[UNVERIFIED]` -- best estimate, not directly checked.
+
+---
+
+## 0. Implementation status and findings
+
+Tracker for what's verified, what's coded, what's next. Tick boxes update as work progresses; findings are pinned one-liners so the doc stays a live record, not a wishlist.
+
+### Phase 0 -- Setup `[done]`
+
+- [x] **`paper-repo/`** cloned by `./scripts/bootstrap.sh`. Path-claim provenance verified against repo snapshot 2026-05-25 (see Sec.4.1).
+- [x] **Trace scripts running.** `./scripts/test.sh` exercises 23 structural-contract assertions in `tests/test_paper_pipeline_structure.py` and `tests/test_strain_identifiers.py`. All green.
+
+### Phase 1 -- Strain identifier mapping `[done]` `[VERIFIED-BY-TRACE]`
+
+- [x] **402/403/404 row asymmetry pinned.** Interaction matrix has 402; Picard catalog has 403 (extra: `LF110`, has metadata but no interaction labels); distance matrix has 404 (extras: `H1-005-0065-L-P`, `H27` -- documented in `dev/predictions/visualize_predictions.ipynb` cell 2 as "lost bacteria", strains that had interaction data initially but were dropped before final analysis). The orphan sets do not overlap.
+- [x] **Bacteria-name <-> distance-matrix bridge.** Use `370+host_distance_matrix_orignames.tsv` (indexed by friendly bacteria names directly). Picard's `Gembase` column is NOT the bridge -- different month code (`.0622.` vs `.0722.`) and only ~33/403 strains happen to overlap.
+- [x] **Distance matrix well-formed.** Symmetric, diagonal is 0.0, self-distance equals row minimum (clone pairs tie at 0).
+- [x] **3 perfect-clone pairs identified.** `ROAR047`/`ROAR072` and `H1-001-0020-M-O`/`H1-003-0090-V-J` are byte-identical row pairs (true duplicates). `IAI15`/`IAI17` is a near-duplicate: distance between them is 0 but their rows differ from each other by ~4e-6 -- independent PanACoTA runs of essentially identical genomes.
+
+### Phase 2 -- Hand-crafted feature pipeline structure `[done]` `[VERIFIED-BY-TRACE]`
+
+Already proven by `tests/test_paper_pipeline_structure.py`:
+
+- [x] **18 pre-one-hot columns for normal phages** (not the 19 earlier doc drafts claimed). 13 for the 4 LF110 phages, which skip the phage-isolation-host merge and same_*_as_host engineering.
+- [x] **114 post-one-hot dim for normal phages**, 109 for LF110 phages.
+- [x] **H_host is phantom.** The line-57 regex filter drops `H-type` from `bact_features` before the line-79 rename runs, so `"H-type": "H_host"` is a silent no-op.
+- [x] **`same_ABC_as_host` is a NaN-presence indicator, not constant True.** `NaN == NaN` is False in pandas, so the column collapses to "does this strain have an ABC capsule detected" rather than the always-True the doc originally claimed.
+- [x] **Rare-binning at `< 3`** for O-type and ST_Warwick only (the inline `< 5` comment in the script is wrong; code uses 3).
+
+### Phase 3 -- CV grouping `[done]` `[VERIFIED-BY-TRACE]`
+
+- [x] **`src/cv.py`** -- `load_strain_groups(paper_repo)` returns sklearn-compatible group labels via connected components at $10^{-4}$ threshold on the orignames distance matrix.
+- [x] **`tests/test_cv.py`** -- necessary and sufficient conditions, group count, clone-pair grouping, GroupKFold mechanics, plus pinning test for reconstruction-output stability (10 tests total).
+- [x] **Reconstructed group statistics** (pinned in `test_cv.py`):
+  - **301 groups** from 402 strains at the $10^{-4}$ threshold. Within the paper's claimed 250-350 range.
+  - **244 singleton groups** (strains with no near-clones) + **57 non-singleton groups**.
+  - **Largest group: 8 strains**. The 3 known clone pairs (Phase 1) all share a group ID with their partner, confirmed by `test_known_clone_pairs_share_a_group`.
+
+### Phase 4 -- Hand-crafted featurizer implementation `[todo]`
+
+- [ ] **`src/featurizers.py`** -- `Featurizer` ABC + `GaborieauHandCrafted` faithful to `predict_all_phages.py`, including the same_ABC_as_host self-compare bug intact for faithful reproduction.
+- [ ] **`tests/test_featurizers.py`** -- regenerates the structural-contract pre/post-one-hot dims directly from our implementation.
+- [ ] **Optional ablation switches** (toggle via constructor flag, default = faithful reproduction): fix same_ABC self-compare; add ABC_serotype to line-79 filter to get ABC_host; restore H-type to line-57 regex.
+
+### Phase 5 -- Per-phage training and metrics `[todo]`
+
+- [ ] **`src/training.py`** -- 4 model classes per phage (RF max_depth=3, RF max_depth=6, LogReg L2, LogReg L1), per-phage class-weight schedule (0.8 / 1 / 1.5 / 2 / 3), 10-fold GroupKFold using Phase-3 groups.
+- [ ] **Per-phage best-of-4 selection by mean AUPR across test folds.**
+- [ ] **`src/metrics.py`** -- AUROC, AUPR (paper's metrics) + within-host/phage Spearman/Pearson (brief's metrics), computed on the same out-of-fold probability outputs.
+- [ ] **DummyClassifier baseline + per-phage-mean baseline** both included as floor references.
+
+### Phase 6 -- Reproduction validation `[todo]`
+
+- [ ] **Per-phage AUROC vs `paper-repo/dev/predictions/per_phage_perf.csv`** within tolerance. Specific fold-strain assignments will not match (we can't reproduce the missing `370+host_cross_validation_groups_1e-4.csv` exactly); per-phage AUROC distribution should match within ~0.05.
+- [ ] **Aggregated AUROC** target: 0.86 (paper Fig 5B) and 0.77 per-phage average (paper Fig 5A).
+
+### Phase 7 -- Bug ablations `[todo]`
+
+Compare faithful reproduction (A) against fixes (B-D) on the same CV folds:
+
+- [ ] **(A)** Faithful: same_ABC_as_host self-compare bug, no H_host, no ABC_host. Reference arm.
+- [ ] **(B)** Fix same_ABC self-compare: add ABC_serotype to line-79 merge filter so ABC_host exists, then `same_ABC = ABC_serotype == ABC_host`. The "as intended" version.
+- [ ] **(C)** Restore H-type to line-57 regex: H_host becomes real, joins to the engineered set as a "same H-type as phage's isolation host?" feature.
+- [ ] **(D)** Both fixes simultaneously: (B) + (C).
+
+Expected effect: small (paper says defense systems are marginal, surface features dominate). If (B)/(C)/(D) move AUROC by more than ~0.02, that's a finding worth flagging in any write-up.
 
 ---
 
@@ -437,6 +506,27 @@ params = [
 - Per-phage best model selected by mean AUPR across folds.
 - `sklearn` v1.1.2.
 
+#### How class_weight actually behaves
+
+`class_weight={0: 1, 1: w}` is a **per-class** multiplier, not a per-sample uniform scaling. The training loss becomes:
+
+$$\mathcal{L}_\text{weighted} = \sum_{i:\, y_i = 0} \ell_i + w \cdot \sum_{i:\, y_i = 1} \ell_i$$
+
+Class-0 samples count once, class-1 samples count $w$ times. The two classes are not multiplied uniformly, so this tilts the loss landscape between them rather than rescaling it overall.
+
+- **For LogisticRegression** (with L2 default): the optimum $\theta$ shifts because positive samples exert $w \times$ the gradient pressure during fitting, while the L2 regularization term is unchanged. Effectively, raising $w$ reduces the regularization's relative pull on features that discriminate positives.
+- **For RandomForestClassifier**: the Gini/entropy criterion at each split substitutes weighted counts for raw counts, so the tree structure itself changes -- splits that purify positives are weighted more heavily.
+
+**Even though we train one model per phage**, the per-class weighting still does work. Without it, a 5%-positive phage's classifier would be trained on a much more imbalanced loss surface than a 50%-positive phage's, and the 96 classifiers would converge under qualitatively different training dynamics. The schedule normalizes that within-phage class imbalance regime across phages, so the trained classifiers are comparable.
+
+Why a step function instead of sklearn's `class_weight="balanced"` (which sets $w = N_\text{neg} / N_\text{pos}$ automatically)? For a 5%-positive phage, "balanced" gives $w \approx 19$, which destabilizes LogReg and inflates RF feature importances at the rare class. Capping at 3 is a heuristic ceiling that keeps training stable.
+
+#### Out-of-fold prediction structure
+
+Across the 10 folds, every strain appears in exactly **one** test fold. So each strain has exactly one prediction, made by the model trained on the 9 folds that didn't include it. The paper's headline AUROC is computed on the concatenation of those 10 fold-level test predictions -- 402 strain-level predictions per phage, from 10 different trained models.
+
+**The paper never trains a "final" model on all 402 strains.** Each phage gets 50 saved models (5 model classes x 10 folds) at training time; per-phage best-of-5 selection picks one model class by mean AUPR, leaving 10 fold-models for that class. For a new bacterium (not in the 402), the paper has options none of which are perfect: pick one fold-model arbitrarily, ensemble all 10 by averaging probabilities, or retrain on all 402. The cocktail-recommender code (`dev/cocktails/` in the paper repo) is where you'd see what they actually did for the 100-strain ColoColi test set in Fig 6; not traced here yet.
+
 ---
 
 ## 7. Evaluation
@@ -470,15 +560,130 @@ The no-model baseline `Y_pred[i, :] = Y_train.mean(axis=0)`:
 
 Strains within core-genome distance $<10^{-4}$ substitutions/site must be in the same fold. The original grouping file isn't in the repo; reconstruct via:
 
-**Option A (use the shipped matrix):** the repo ships `data/genomics/bacteria/isolation_strains/panacota/tree/370+host_distance_matrix.tsv`, a pre-computed pairwise phylogenetic distance matrix. Threshold at $10^{-4}$ substitutions/site, find connected components. No Newick parsing required.
+**Option A (use the shipped matrix):** the repo ships `data/genomics/bacteria/isolation_strains/panacota/tree/370+host_distance_matrix_orignames.tsv`, a 404 x 404 pre-computed pairwise phylogenetic distance matrix indexed by friendly bacteria names (the `_orignames` variant -- the non-orignames file uses sequential PanACoTA build IDs `ESCO.0722.NNNNN` which DON'T match picard's `Gembase` column; see `test_strain_identifiers.py` for the structural-contract test pinning the naming). Threshold at $10^{-4}$ substitutions/site, find connected components.
 
-**Option B (parse Newick yourself):** load the Newick tree at `data/genomics/bacteria/panacota/tree/`, compute pairwise distances along the tree, threshold at $10^{-4}$, find connected components. Equivalent to Option A in practice.
+**Option B (parse Newick yourself):** load the Newick tree at `data/genomics/bacteria/panacota/tree/370+host_ultrametric_tree_root=B992.nwk` (the paper's LMM code uses this -- leaves are bacteria-named directly, `bact_phylo_tree$tip.label` per `dev/inference_bacteria/phage_per_phage/phage_per_phage_MCMC_family=binom.Rmd:79-87`). Compute cophenetic pairwise distances. Threshold at $10^{-4}$, find connected components. `[UNVERIFIED]` Should be numerically equivalent to Option A -- both ultimately derive from PanACoTA's output of the same tree -- but we haven't checked this directly (would require a Newick parser dependency we don't otherwise need). If you go this route, sanity-check against Option A on a few strain pairs first. Worth verifying in a larger project, out of scope here.
 
 **Option C (fast proxy):** Run `skani triangle` on the 402 FASTAs, threshold at ANI $\geq 99.99\%$, find connected components. ~1 minute on a laptop. Doesn't require the distance matrix or Newick.
+
+#### Grouping is by connected component, not pairwise
+
+The threshold rule "strains within $d < 10^{-4}$ are in the same fold" gets one detail wrong if read literally: **same-fold-ness is by connected component of the thresholded graph, not by pairwise distance.** Three strains A, B, C where $d(A,B) < 10^{-4}$ and $d(B,C) < 10^{-4}$ but $d(A,C) > 10^{-4}$ are all in the same group via B. Transitive closure.
+
+Why this matters:
+- A clade with strains spaced $0.5 \times 10^{-4}$ apart can collapse into one large group whose total diameter is well above $10^{-4}$, far larger than naive pairwise inspection suggests.
+- The reverse misreading -- "if two strains are >$10^{-4}$ apart they can be in different folds" -- is wrong. They might still need to share a fold via intermediates.
+
+When asserting fold correctness in tests, distinguish:
+
+- **Necessary** (cheap to check): for every pair $(i, j)$ with $d_{ij} < 10^{-4}$ directly, group$(i) =$ group$(j)$.
+- **Sufficient** (the actual paper rule): group assignments are the connected components of the graph thresholded at $10^{-4}$ (transitive closure).
+
+Both should be tested. Failing the necessary condition means the grouping is broken. Passing necessary but failing sufficient means transitively-near strains got split across folds, which is the subtle data-leakage bug the paper's threshold is designed to prevent.
+
+#### Expectations for fold-level reproduction
+
+`sklearn.model_selection.GroupKFold` has **no `random_state`** parameter -- it's deterministic given (a) the group-label integers and (b) the order of samples passed in. Its algorithm sorts groups by size descending and greedily assigns each to the currently-smallest fold, breaking ties by group ID. So fold-level reproduction depends on whether our group labels and sample ordering match the paper's, which we can't verify (the paper's grouping code is gone). **Expect different specific fold assignments**; don't write tests that assert exact fold membership.
+
+What to assert instead: the *invariants* that any correct grouping must satisfy (the necessary and sufficient conditions above), and that the *number* of effective groups falls in the expected range (paper claims ~250-350 effective independent strains after grouping).
 
 ### 7.4 Paper-numbers caveat
 
 The paper reports binarized AUROC = 0.86. Your task is ordinal Spearman/Pearson. These are not directly comparable. To get a calibrated reference number, **run the Gaborieau feature set through your ordinal harness yourself**, on your folds, and use that as the baseline-to-beat. This is exactly the reproduction step.
+
+### 7.5 Metric primer: AUROC, AUPR, Pearson, Spearman
+
+Definitions and intuition for the four metrics we use to evaluate reproduction and the brief's task. All four take a vector of predictions $\hat{y}$ and a vector of true labels $y$.
+
+**AUROC** (Area Under the Receiver Operating Characteristic curve). Used for binary classification. Two equivalent definitions:
+
+1. **Geometric.** Sweep the classifier's decision threshold from 1 (predict everything negative) down to 0 (predict everything positive). At each threshold, plot TPR (true positive rate = recall on positives) on the y-axis vs FPR (false positive rate = one minus recall on negatives) on the x-axis. The curve goes from $(0, 0)$ to $(1, 1)$. AUROC is the integral.
+
+2. **Probabilistic** (more intuitive): $\text{AUROC} = P(\hat{y}_\text{positive} > \hat{y}_\text{negative})$ when both are drawn at random. The probability that a randomly chosen positive sample has a higher predicted probability than a randomly chosen negative sample.
+
+Range: AUROC $\in [0, 1]$. $0.5$ = random rank ordering; $1.0$ = perfect; $0.0$ = perfectly inverted (means labels are swapped relative to your scores). AUROC is **threshold-free and rank-based** -- depends only on relative ordering of scores, not absolute values.
+
+**AUPR** (Area Under the Precision-Recall curve). Used for binary classification, especially with rare positives. Sweep threshold the same way as AUROC, but plot precision (y-axis) vs recall (x-axis). The integral is AUPR.
+
+Range: AUPR $\in [0, 1]$ with **a baseline that depends on positive prevalence**. A random predictor's expected AUPR equals the positive class fraction -- so a 5%-positive phage's random baseline is AUPR$=0.05$, while a 50%-positive phage's is AUPR$=0.50$. Cross-phage comparison of raw AUPR is misleading; compare against each phage's prevalence floor.
+
+AUPR is more sensitive to performance on the positive class than AUROC. The paper uses **mean AUPR across CV folds** as the criterion for picking the best model class per phage (Sec.6.8).
+
+**Pearson correlation** $r$. Used for real-valued predictions vs real-valued labels.
+
+$$r = \frac{\text{cov}(X, Y)}{\sigma_X \cdot \sigma_Y}$$
+
+Measures the **linear** relationship between X and Y. Range $[-1, 1]$. $r = 1$: perfect positive linear; $r = -1$: perfect negative linear; $r = 0$: no linear relationship. **Sensitive to scale**: if $\hat{y}$ lives in $[0, 1]$ but $y$ lives in $\{0, 1, 2, 3, 4\}$, Pearson is bounded below 1 even when the ranking is perfect -- the slope of the best linear fit can't reach 1 because the predicted range is compressed.
+
+**Spearman correlation** $\rho$. Pearson computed on the **ranks** of $X$ and $Y$.
+
+$$\rho = r(\text{rank}(X), \text{rank}(Y))$$
+
+Measures the **monotonic** relationship. Range $[-1, 1]$. $\rho = 1$: perfectly rank-aligned -- any monotone-increasing transformation of either variable gives $\rho = 1$. **Robust to monotonic nonlinearities and outliers.** Doesn't care if you predict $[0.05, 0.55, 0.92, 0.97]$ against true $[0, 1, 3, 4]$ -- only the rank order matters.
+
+| Metric | Range | Random baseline | Sensitive to | Used for |
+|---|---|---|---|---|
+| AUROC | $[0, 1]$ | $0.5$ | Rank order only | Binary, paper reproduction |
+| AUPR | $[0, 1]$ | positive prevalence | Rank + emphasis on rare class | Binary, paper model selection |
+| Pearson | $[-1, 1]$ | $0$ | Linear scale match | Ordinal regression (brief) |
+| Spearman | $[-1, 1]$ | $0$ | Rank order only | Ordinal regression (brief) |
+
+### 7.6 Binary classifier as ordinal score: the rank-vs-scale tradeoff
+
+The paper trains a binary classifier on `y_binary = (y > 0)`, producing $P(\text{lytic}) \in [0, 1]$. The brief asks for ordinal regression on the 0-4 MLC scores. **The same trained model serves both tasks**, but with a tradeoff between Spearman and Pearson that's worth understanding before reading our reproduction numbers.
+
+**Concrete example.** Four strains, one phage, true MLC scores $[0, 1, 3, 4]$. The binary classifier sees binarized labels $[0, 1, 1, 1]$ and produces illustrative probabilities $[0.05, 0.55, 0.92, 0.97]$.
+
+| Metric | Comparison | Result |
+|---|---|---|
+| AUROC vs `y_binary` | rank of $[0.05, 0.55, 0.92, 0.97]$ vs $[0, 1, 1, 1]$ | $1.0$ (negative ranked below all positives) |
+| Spearman vs `y_ordinal` | rank of $[0.05, 0.55, 0.92, 0.97]$ vs $[0, 1, 3, 4]$ | $1.0$ (orders match exactly) |
+| Pearson vs `y_ordinal` | raw $[0.05, 0.55, 0.92, 0.97]$ vs $[0, 1, 3, 4]$ | $\approx 0.92$ (capped by saturation) |
+
+**Why Spearman = 1 but Pearson < 1.** The probabilities are monotone-aligned with the true MLC (rank-wise), but the relationship isn't linear. The MLC gap from 3 to 4 maps to $P(\text{lytic})$ going from $0.92$ to $0.97$ (delta $0.05$), while the MLC gap from 0 to 1 maps to $0.05 \to 0.55$ (delta $0.50$). The classifier saturates near 1 for high-MLC strains, compressing the gap between "potently lytic" and "modestly lytic." Spearman doesn't care; Pearson penalizes the nonlinearity directly.
+
+**Information loss.** The Spearman-vs-Pearson gap is the *scale-mismatch penalty* for using a binary classifier on an ordinal task. The classifier was never told to distinguish MLC 1 from MLC 4 -- those got the same binary training label -- so its output has no incentive to differentiate them at the upper end. Pearson punishes this; Spearman doesn't.
+
+**Practical consequence for reproduction.** When we run the paper's binary classifiers through the brief's ordinal metrics, expect:
+
+- Within-host and within-phage **Spearman** to look quite good (the classifier preserves rank well within each phage column / strain row).
+- Within-host and within-phage **Pearson** to look lower than Spearman, because the linear relationship between $P(\text{lytic})$ and the 0-4 MLC scale is compressed by the $[0, 1]$ codomain.
+
+That Spearman-Pearson gap is the *floor of improvement available from native ordinal regression* (Sec.7.7) -- a regressor trained on the integer score could in principle close it by predicting on the actual 0-4 scale.
+
+### 7.7 Ordinal regression options
+
+The brief's task is ordinal regression on 0-4 MLC scores. Four approaches, in increasing methodological commitment:
+
+| Approach | Loss | Output | Pros | Cons |
+|---|---|---|---|---|
+| (1) Binary + $P(\text{lytic})$ | binary cross-entropy on `(y > 0)` | scalar in $[0, 1]$ | Faithful to paper; sklearn-native | Caps Pearson via scale mismatch; ignores within-positive ordering |
+| (2) Regression on integer | MSE on `y` as real | real-valued scalar | Simple; uses ordinality | Assumes smooth/linear underlying; ignores 0-4 bounds |
+| (3) Multiclass + expected value | multiclass cross-entropy on `y` as 5-way label; predict $E[k] = \sum_k k \cdot P(y = k)$ | scalar in $[0, 4]$ | Closest to "5-class from a distribution" framing | Loss ignores label ordering (see below) |
+| (4) Ordinal regression | cumulative-link / proportional-odds, ordinal-aware loss | class label or scalar | Formally correct ordinal | More setup; not native to sklearn (use `statsmodels.OrderedModel` or `mord`) |
+
+**Why approach (3) requires more than just vanilla multiclass.** The conceptual framing -- each cell of the 402x96 matrix is a sample from a 5-category distribution conditional on features, train multiclass classifier, take expected value -- is sound. The catch is that **vanilla multiclass cross-entropy treats the 5 labels as unordered categories**. It penalizes the predicted probability of the true class being low; it is indifferent to where the *rest* of the probability mass goes.
+
+Concrete example with true label = 3:
+
+| Prediction | $p_3$ | Cross-entropy loss | Expected value | Ordinal quality |
+|---|---|---|---|---|
+| A: $[0.0, 0.0, 0.0, 0.5, 0.5]$ | $0.5$ | $-\log(0.5)$ | $3.5$ | Off by $0.5$ |
+| B: $[0.5, 0.0, 0.0, 0.5, 0.0]$ | $0.5$ | $-\log(0.5)$ | $1.5$ | Off by $1.5$ |
+
+Both predictions have identical cross-entropy loss -- both got $p_3 = 0.5$. Vanilla multiclass training has no gradient signal preferring A over B. Whichever the model converges on depends on regularization and other forces, not on ordinal correctness.
+
+To restore ordinal awareness, swap cross-entropy for an **ordinal-aware loss**:
+
+- **Earth Mover's Distance** (Wasserstein) between predicted distribution and the one-hot at the true class. Predicting mass near $k$ costs less than predicting mass far from $k$.
+- **Squared-distance-weighted cross-entropy**, e.g. $\sum_k (k - y)^2 \cdot p_k$.
+- **Cumulative-link logistic** (proportional-odds model): predict $P(y \leq k \mid x)$ for each threshold $k$, constrained monotone non-decreasing in $k$.
+
+These let the classifier exploit the label ordering during training, not just during evaluation.
+
+**Empirical caveat.** In practice, vanilla multiclass + EV often works "okay" even without ordinal-aware loss, because the underlying biology gives the classifier enough signal that nearby-class probabilities come out sensibly without explicit constraint. The features distinguishing class 0 from class 4 are different from those distinguishing class 0 from class 1, so the trained probability mass tends to cluster sensibly. Don't expect optimal results, but it's not worthless as a baseline.
+
+**Practical recommendation for going beyond reproduction.** Run (1)-(4) as parallel arms on the same CV folds, report all four under each of the four metric variants (Sec.7.1). The win from native ordinal regression over binary + probabilities is the *empirical* test of whether respecting ordinality matters for this dataset. Prior intuition says "yes, marginally"; empirical answer is what matters.
 
 ---
 

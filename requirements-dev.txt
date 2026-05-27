@@ -75,3 +75,4 @@ types-Pillow
 types-tqdm
 scipy-stubs
 pandas-stubs
+scikit-learn-stubs

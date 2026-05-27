@@ -19,15 +19,10 @@ Requirements:
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pandas as pd
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-PAPER_REPO_URL = "https://github.com/mdmparis/coli_phage_interactions_2023.git"
-PAPER_REPO_PATH = PROJECT_ROOT / "paper-repo"
 
 # Doc-claimed values from docs/tabula_research.md Sec.6 and Sec.17.
 # Update these alongside the doc if the paper repo's structure changes.
@@ -40,28 +35,6 @@ EXPECTED_PRE_ONE_HOT_LF110 = 13
 EXPECTED_POST_ONE_HOT_NORMAL = 114
 EXPECTED_POST_ONE_HOT_LF110 = 109
 EXPECTED_N_LF110_PHAGES = 4
-
-
-@pytest.fixture(scope="module")
-def paper_repo() -> Path:
-    """Locate the paper repo on disk; clone it to PAPER_REPO_PATH if missing.
-
-    Skips the module if cloning fails (e.g. no network).
-    """
-    if not PAPER_REPO_PATH.exists():
-        try:
-            subprocess.run(
-                ["git", "clone", "--depth", "1", PAPER_REPO_URL, str(PAPER_REPO_PATH)],
-                check=True, capture_output=True, timeout=120,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-            pytest.skip(f"Cannot clone paper repo (no network?): {exc}")
-    if not (PAPER_REPO_PATH / "data" / "interactions" / "interaction_matrix.csv").exists():
-        pytest.skip(
-            f"Paper repo at {PAPER_REPO_PATH} exists but is missing expected files. "
-            f"Re-clone with `rm -rf {PAPER_REPO_PATH} && git clone {PAPER_REPO_URL} {PAPER_REPO_PATH}`."
-        )
-    return PAPER_REPO_PATH
 
 
 @pytest.fixture(scope="module")
