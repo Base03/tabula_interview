@@ -42,11 +42,16 @@ All scripts `cd` to repo root and invoke binaries from `./venv/bin/` directly. T
 
 ## src/ and tests/
 
-`src/` is empty (just `__init__.py`); all implementation work lives there once started.
-
-`tests/` contains:
+`src/`:
 - `__init__.py` (empty)
-- `test_paper_pipeline_structure.py` -- structural-contract test that traces `predict_all_phages.py` against the data in `paper-repo/` and asserts the pre/post-one-hot dims, the 402-vs-403 anomaly, the absence of `H_host`, the LF110 carve-out, and the NaN-handling of the `same_ABC_as_host` bug. If the paper repo's schema ever shifts, this test surfaces which doc claim went stale. Auto-clones `paper-repo/` on first run; skips with a clear message if cloning fails.
+- `cv.py` -- `load_strain_groups(paper_repo)` returns `pd.Series` mapping bacterium -> integer group label, via connected components at 1e-4 threshold on the orignames distance matrix. Replaces the missing `370+host_cross_validation_groups_1e-4.csv` from the paper repo.
+
+`tests/`:
+- `__init__.py` (empty)
+- `conftest.py` -- shared `paper_repo` fixture (session-scoped, auto-clones if missing).
+- `test_paper_pipeline_structure.py` -- structural-contract test that traces `predict_all_phages.py` against the data in `paper-repo/`: pre/post-one-hot dims (18/114), 402-vs-403 anomaly, absent `H_host`, LF110 carve-out, `same_ABC_as_host` NaN-presence behavior.
+- `test_strain_identifiers.py` -- pins the cross-file strain-name joins: 402/403/404 row asymmetry, "lost bacteria" (H1-005-0065-L-P, H27), 3 perfect-clone pairs, distance-matrix well-formedness, picard's Gembase column is NOT the bridge to the distance matrix.
+- `test_cv.py` -- necessary + sufficient correctness conditions for the grouping, pinned reconstruction outputs (301 groups, 244 singletons, 57 non-singleton groups, largest size 8), clone pairs in same group, GroupKFold mechanics.
 
 ## paper-repo/
 

@@ -18,6 +18,7 @@ einops
 datasets  # HuggingFace datasets
 huggingface-hub
 Pillow
+seaborn
 
 # =============================================================================
 # LLM / Transformers
